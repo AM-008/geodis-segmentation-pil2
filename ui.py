@@ -2,6 +2,8 @@ import tkinter as tk
 from tkinter import messagebox
 from PIL import Image, ImageTk, ImageDraw
 import os
+from segmentation import segmentation_from_ui, visualize_segmentation
+import numpy as np
 
 
 class ImageSegmentationUI:
@@ -97,6 +99,18 @@ class ImageSegmentationUI:
         # Info label for drawing status
         self.drawing_info_label = tk.Label(draw_frame, text="Mode: OFF", fg="gray")
         self.drawing_info_label.pack(side=tk.LEFT, padx=15)
+        
+        # Frame for segmentation controls
+        segmentation_frame = tk.Frame(self.root)
+        segmentation_frame.pack(pady=5, padx=10, fill=tk.X)
+        
+        self.run_button = tk.Button(segmentation_frame, text="Run Segmentation", 
+                                     command=self.run_segmentation, bg="lightgreen", 
+                                     font=("Arial", 10, "bold"))
+        self.run_button.pack(side=tk.LEFT, padx=5)
+        
+        self.segmentation_status_label = tk.Label(segmentation_frame, text="Ready", fg="green")
+        self.segmentation_status_label.pack(side=tk.LEFT, padx=15)
         
         # Canvas for image display
         self.canvas = tk.Canvas(self.root, bg="gray30", cursor="cross")
@@ -359,6 +373,147 @@ class ImageSegmentationUI:
         self.create_mask()
         self.display_image()
         messagebox.showinfo("Info", "All dots cleared.")
+    
+    def run_segmentation(self):
+        """Execute geodesic segmentation and output image with background removed."""
+        if self.image is None:
+            messagebox.showerror("Error", "Please load an image first.")
+            return
+        
+        if not self.blue_dots and not self.red_dots:
+            messagebox.showerror("Error", "Please draw at least one seed point (blue or red).")
+            return
+        
+        try:
+            self.segmentation_status_label.config(text="Processing...", fg="orange")
+            self.root.update()
+            
+            # Run segmentation
+            print(f"\n{'='*60}")
+            print("STARTING GEODESIC SEGMENTATION")
+            print(f"{'='*60}")
+            print(f"Image size: {self.image.width}x{self.image.height}")
+            print(f"Blue seeds (foreground): {len(self.blue_dots)} points")
+            print(f"Red seeds (background): {len(self.red_dots)} points")
+            
+            results = segmentation_from_ui(
+                image=self.image,
+                blue_dots=self.blue_dots,
+                red_dots=self.red_dots,
+                gradient_sigma=1.0
+            )
+            
+            print("\nSegmentation completed successfully!")
+            
+            # Extract segmentation results
+            label_map = results['label_map']
+            
+            # Create output image with background removed (keeping only foreground)
+            output_image = self._create_foreground_image(label_map)
+            
+            # Save segmented image
+            output_path = "segmentation_result.png"
+            output_image.save(output_path)
+            print(f"✓ Segmented image saved: {output_path}")
+            
+            # Create and save visualization
+            viz_path = "segmentation_visualization.png"
+            visualize_segmentation(self.image, results, output_path=viz_path)
+            print(f"✓ Visualization saved: {viz_path}")
+            
+            # Display the segmented image on canvas
+            self._display_segmentation_result(output_image, label_map)
+            
+            print(f"{'='*60}\n")
+            
+            self.segmentation_status_label.config(text="Complete!", fg="green")
+            messagebox.showinfo(
+                "Segmentation Complete",
+                f"Segmentation completed successfully!\n\n"
+                f"Output files saved:\n"
+                f"• {output_path} (background removed)\n"
+                f"• {viz_path} (diagnostic visualization)"
+            )
+            
+        except Exception as e:
+            self.segmentation_status_label.config(text="Error", fg="red")
+            print(f"\n{'='*60}")
+            print("ERROR IN SEGMENTATION")
+            print(f"{'='*60}")
+            print(f"Error: {str(e)}")
+            print(f"{'='*60}\n")
+            messagebox.showerror("Segmentation Error", f"An error occurred:\n{str(e)}")
+    
+    def _create_foreground_image(self, label_map):
+        """
+        Create output image with background removed (keeping only foreground).
+        
+        Args:
+            label_map (np.ndarray): Segmentation label map (1=foreground, 0=background)
+        
+        Returns:
+            PIL.Image: RGBA image with background removed
+        """
+        # Convert original image to RGBA
+        if self.image.mode != 'RGBA':
+            rgba_image = self.image.convert('RGBA')
+        else:
+            rgba_image = self.image.copy()
+        
+        # Get image data
+        img_array = np.array(rgba_image)
+        
+        # Create alpha channel based on segmentation
+        # Keep foreground (label=1), remove background (label=0)
+        alpha = np.zeros_like(label_map, dtype=np.uint8)
+        alpha[label_map == 1] = 255  # Fully opaque for foreground
+        alpha[label_map == 0] = 0    # Fully transparent for background
+        
+        # Apply alpha channel
+        img_array[:, :, 3] = alpha
+        
+        # Create output image
+        output_image = Image.fromarray(img_array, 'RGBA')
+        
+        return output_image
+    
+    def _display_segmentation_result(self, segmented_image, label_map):
+        """
+        Display the segmentation result overlaid with the original image.
+        
+        Args:
+            segmented_image (PIL.Image): Segmented image with background removed
+            label_map (np.ndarray): Binary label map
+        """
+        # Create a composite visualization
+        # Show segmented foreground with a semi-transparent overlay
+        display_image = self.image.copy().convert('RGBA')
+        display_array = np.array(display_image)
+        
+        # Highlight foreground region with a subtle blue tint
+        mask = (label_map == 1)
+        display_array[mask, 2] = np.minimum(display_array[mask, 2] + 80, 255)  # Enhance blue
+        
+        # Dim background region
+        bg_mask = (label_map == 0)
+        display_array[bg_mask] = (display_array[bg_mask] * 0.6).astype(np.uint8)
+        
+        display_image_highlighted = Image.fromarray(display_array, 'RGBA')
+        
+        # Resize for display
+        new_width = int(self.image.width * self.zoom_level)
+        new_height = int(self.image.height * self.zoom_level)
+        display_resized = display_image_highlighted.resize(
+            (new_width, new_height), 
+            Image.Resampling.LANCZOS
+        )
+        
+        # Update canvas
+        self.photo_image = ImageTk.PhotoImage(display_resized)
+        self.canvas.delete("all")
+        canvas_center_x = self.canvas.winfo_width() // 2
+        canvas_center_y = self.canvas.winfo_height() // 2
+        self.canvas.create_image(canvas_center_x, canvas_center_y, image=self.photo_image)
 
 
 def main():

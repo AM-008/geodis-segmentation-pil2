@@ -149,6 +149,130 @@ The script intelligently translates canvas click positions to original image coo
 
 ---
 
+### Step 5: Geodesic Segmentation
+
+**What was done:**
+- Created `segmentation.py` module implementing geodesic distance-based image segmentation
+- Uses Dijkstra's algorithm to compute weighted shortest paths from seed pixels
+- Integrates blue and red dots from the UI as seed markers
+- Segments image into foreground (blue) and background (red) regions
+- Provides visualization and post-processing capabilities
+- Added "Run Segmentation" button to the UI to execute the segmentation algorithm
+
+**Algorithm Overview:**
+
+The geodesic segmentation algorithm works by computing distances that respect image structure rather than using simple Euclidean distance.
+
+1. **Gradient Computation:**
+   - Compute image gradient using Sobel operators: $\nabla I = \sqrt{(\frac{\partial I}{\partial x})^2 + (\frac{\partial I}{\partial y})^2}$
+   - Smooth image first to reduce noise sensitivity: Gaussian filter with adjustable sigma
+   - Normalize gradient to [0, 1]
+
+2. **Edge Weighting:**
+   - Define edge weight based on gradient magnitude: $w(p,q) = 1 + 5 \cdot |\nabla I|$
+   - High gradient (strong edges) → high weight (expensive path)
+   - Low gradient (uniform regions) → low weight (cheap path)
+   - This ensures the algorithm follows object boundaries, not crossing structural edges
+
+3. **Distance Map Computation (Dijkstra's Algorithm):**
+   - For each seed set (blue foreground, red background), compute geodesic distance map
+   - Distance represents "cost" to reach each pixel from the seed set
+   - Uses priority queue for efficient computation
+   - Solves: $D(p) = \min_{\text{paths } \gamma} \sum w(\gamma)$
+   - Results in **distance_blue** (cost to reach from foreground seeds) and **distance_red** (cost from background seeds)
+
+4. **Pixel Label Assignment:**
+   - Each pixel is labeled based on minimum distance:
+     - If closer to blue seeds: assign to foreground (label = 1)
+     - If closer to red seeds: assign to background (label = 0)
+   - Pixels equidistant to both are arbitrarily assigned (rarely occurs in practice)
+
+5. **Optional Post-processing:**
+   - Morphological operations to clean up segmentation
+   - Remove small connected components (noise reduction)
+   - Gaussian smoothing for soft boundaries
+
+**Key Features:**
+- **8-connectivity:** Considers diagonal neighbors for more natural segmentation
+- **Efficiency:** O(n log n) complexity with Dijkstra + priority queue
+- **Robustness:** Gradient-based weighting is insensitive to illumination changes
+- **Multi-label:** Can be extended to handle multiple regions with multiple seed sets
+- **Confidence Map:** Computes confidence of segmentation (difference between distances)
+
+**Integration with UI:**
+
+The UI now includes a "Run Segmentation" button that:
+1. Gathers blue_dots (foreground) and red_dots (background) from user annotations
+2. Calls `segmentation_from_ui()` function from segmentation.py
+3. Executes geodesic segmentation algorithm
+4. Creates output image with background removed (keeping only foreground)
+5. Displays result and saves visualization
+
+**Output:**
+- **Segmented Image:** PNG file with background removed, keeping only the area of interest (blue-marked region)
+- **Visualization:** 6-panel diagnostic image showing:
+  - Original image
+  - Binary segmentation result (blue/red regions)
+  - Overlay on original image
+  - Distance map from foreground seeds (blue)
+  - Distance map from background seeds (red)
+  - Confidence map showing certainty of assignments
+
+**How to Use:**
+1. Run `python ui.py`
+2. Load an image
+3. Set to "Blue Dots" mode and click on areas of interest
+4. Set to "Red Dots" mode and click on background areas to exclude
+5. Click "Run Segmentation" button
+6. Wait for processing (displays status messages)
+7. Segmented image saved as `segmentation_result.png` (background removed, only foreground)
+8. Visualization saved as `segmentation_visualization.png` (6-panel diagnostic view)
+
+**Parameters:**
+- `gradient_sigma`: Smoothing applied before gradient computation (default: 1.0). Increase for smoother gradients.
+- `connectivity`: Neighborhood type (4 or 8). Default: 8 for better quality.
+- Post-processing parameters: `sigma` for smoothing, `min_size` for removing small components.
+
+**Limitations and Notes:**
+- Requires at least one seed point (blue or red)
+- Performance depends on image size and number of seeds
+- Works best with clear boundaries between foreground and background
+- Can be extended for multi-label segmentation with more seed colors
+
+---
+
+## Dependencies
+
+```
+Pillow>=10.0.0
+numpy>=1.24.0
+scipy>=1.10.0
+```
+
+Install with:
+```bash
+pip install pillow numpy scipy
+```
+
+---
+
+## File Structure
+
+```
+geodis-segmentation-pil2/
+├── ui.py                 # Main Tkinter UI application
+├── segmentation.py       # Geodesic segmentation algorithm
+├── main.py              # Entry point (legacy)
+├── pyproject.toml       # Project configuration
+└── README.md            # This file
+```
+
+---
+
 ## Next Steps
 
-- Step 5: Segmentation process integration
+- Add more filter options (bilateral filtering, edge detection modes)
+- Implement undo/redo for seed placement
+- Support for batch processing multiple images
+- Add more post-processing filters
+- Real-time segmentation preview while drawing seeds
